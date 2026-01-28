@@ -228,10 +228,12 @@ def eval_poker_hand_5(cards, wild_rank=None):
         return _eval_standard(cards)
     
     full_deck = [{'rank': r, 'suit': s} for s in SUITS for r in RANKS]
+    # Optimización: Solo considerar cartas que no tenemos
     available = [c for c in full_deck if not any(nc['rank'] == c['rank'] and nc['suit'] == c['suit'] for nc in normal_cards)]
     
     best_hand_val = (-1, [], "")
     import itertools
+    # Iterar combinaciones de sustitución
     for replacement in itertools.combinations(available, wild_count):
         test_hand = normal_cards + list(replacement)
         val = _eval_standard(test_hand)
@@ -240,15 +242,24 @@ def eval_poker_hand_5(cards, wild_rank=None):
             
     return (best_hand_val[0], best_hand_val[1], best_hand_val[2] + " (con Comodín)")
 
-def eval_texas_hand(hole_cards, community_cards):
+def eval_texas_hand(hole_cards, community_cards, wild_rank=None):
+    """
+    Evalúa la mejor mano de 5 cartas de las 7 disponibles, considerando comodines.
+    """
     all_cards = hole_cards + community_cards
     best_score = (-1, [], "")
+    
+    # Si hay menos de 5 cartas, evaluar lo que hay (no debería pasar en showdown final)
     if len(all_cards) < 5:
-        return _eval_standard(all_cards)
+        return eval_poker_hand_5(all_cards, wild_rank)
+
+    # Probar todas las combinaciones de 5 cartas de las 7
     for combo in itertools.combinations(all_cards, 5):
-        score = _eval_standard(list(combo))
+        # Usamos eval_poker_hand_5 para cada combinación para que maneje el comodín
+        score = eval_poker_hand_5(list(combo), wild_rank)
         if score > best_score:
             best_score = score
+            
     return best_score
 
 class PokerGame:
@@ -360,6 +371,7 @@ class TexasHoldemGame:
         self.pot = 0
         self.initial_bet = 0
         self.bet = 0
+        self.wild_rank = None
 
     def start_game(self, players, config):
         self.players_in_game = players
@@ -368,6 +380,10 @@ class TexasHoldemGame:
         self.bet = self.initial_bet 
         self.pot = self.initial_bet * len(players) 
         
+        self.wild_rank = None
+        if config.get('wildcards', False):
+            self.wild_rank = random.choice(RANKS)
+
         self.deck = create_deck()
         self.hands = {p: [] for p in players}
         self.community_cards = []
@@ -425,7 +441,8 @@ class TexasHoldemGame:
         best_score = (-1, [], "")
         winners = []
         for p in self.active_players:
-            score_tuple = eval_texas_hand(self.hands[p], self.community_cards)
+            # Pasar wild_rank
+            score_tuple = eval_texas_hand(self.hands[p], self.community_cards, self.wild_rank)
             self.hand_names[p] = score_tuple[2]
             if score_tuple > best_score:
                 best_score = score_tuple
@@ -453,7 +470,8 @@ class TexasHoldemGame:
             'hand_names': self.hand_names,
             'game_type': 'texas',
             'pot': self.pot,
-            'bet': self.initial_bet
+            'bet': self.initial_bet,
+            'wild_rank': self.wild_rank # Enviar al frontend
         }
 
 # --- LÓGICA VIUDA NEGRA ---
@@ -461,27 +479,32 @@ class TexasHoldemGame:
 class ViudaNegraGame:
     def __init__(self):
         self.deck = []
-        self.hands = {} # Jugadores
-        self.community_pile = [] # Cartas al centro
-        self.widow_hand = [] # Mazo extra
-        self.status = 'waiting' # selection_host, offering_widow, playing, last_round, finished
+        self.hands = {} 
+        self.community_pile = [] 
+        self.widow_hand = [] 
+        self.status = 'waiting' 
         self.players_in_game = []
         self.turn_index = 0
-        self.offer_index = 0 # Indice para ofrecer viuda
+        self.offer_index = 0 
         self.host_name = ""
-        self.knocker = None # Quien tocó la mesa
+        self.knocker = None 
         self.winners = []
         self.win_reason = ""
         self.hand_names = {}
         self.pot = 0
         self.bet = 0
+        self.wild_rank = None
 
     def start_game(self, players, config):
         self.players_in_game = players
-        self.host_name = players[0] # Asumimos index 0 es host
+        self.host_name = players[0] 
         self.bet = int(config.get('bet', 0))
         self.pot = self.bet * len(players)
         
+        self.wild_rank = None
+        if config.get('wildcards', False):
+            self.wild_rank = random.choice(RANKS)
+
         self.deck = create_deck()
         self.hands = {p: [] for p in players}
         self.community_pile = []
@@ -489,38 +512,31 @@ class ViudaNegraGame:
         self.knocker = None
         self.hand_names = {p: "?" for p in players}
         self.turn_index = 0
-        self.offer_index = 1 # Empezar a ofrecer al jugador siguiente al host
+        self.offer_index = 1 
         
-        # Repartir 5 a cada jugador
         for _ in range(5):
             for p in players:
                 if self.deck: self.hands[p].append(self.deck.pop())
         
-        # Repartir 5 a la Viuda
         for _ in range(5):
             if self.deck: self.widow_hand.append(self.deck.pop())
 
-        # Estado inicial: Host decide
         self.status = 'selection_host' 
 
     def player_action(self, player, action, data=None):
-        # --- FASE 1: Host Selección ---
         if self.status == 'selection_host':
             if player != self.host_name: return
             
             if action == 'keep_hand':
-                # Host se queda su mano, ofrecer viuda a los demas
                 if len(self.players_in_game) > 1:
                     self.status = 'offering_widow'
-                    self.offer_index = 1 # Siguiente jugador (index 0 es host)
+                    self.offer_index = 1 
                 else:
-                    # Si juega solo (test), viuda al centro
                     self.community_pile = self.widow_hand
                     self.widow_hand = []
                     self.status = 'playing'
             
             elif action == 'take_widow':
-                # Host cambia su mano por la viuda. Su mano vieja va al centro.
                 old_hand = self.hands[self.host_name]
                 self.hands[self.host_name] = self.widow_hand
                 self.community_pile = old_hand
@@ -528,41 +544,34 @@ class ViudaNegraGame:
                 self.status = 'playing'
             return 'update'
 
-        # --- FASE 2: Ofrecer Viuda ---
         elif self.status == 'offering_widow':
             target_player = self.players_in_game[self.offer_index]
             if player != target_player: return
 
             if action == 'buy_widow':
-                # Compra la viuda por el valor de la apuesta
                 self.pot += self.bet
                 old_hand = self.hands[player]
                 self.hands[player] = self.widow_hand
                 self.community_pile = old_hand
                 self.widow_hand = []
-                self.status = 'playing' # Comienza el juego
+                self.status = 'playing' 
             
             elif action == 'pass_widow':
-                # No la quiere, siguiente
                 self.offer_index += 1
                 if self.offer_index >= len(self.players_in_game):
-                    # Nadie la quiso, la viuda se abre al centro
                     self.community_pile = self.widow_hand
                     self.widow_hand = []
                     self.status = 'playing'
             return 'update'
 
-        # --- FASE 3: Juego (Playing & Last Round) ---
         elif self.status in ['playing', 'last_round']:
             current_p = self.players_in_game[self.turn_index]
             if player != current_p: return
 
             if action == 'swap_1':
-                # data: {hand_idx: 0, comm_idx: 2}
                 h_idx = data.get('hand_idx')
                 c_idx = data.get('comm_idx')
                 
-                # Intercambio
                 if 0 <= h_idx < 5 and 0 <= c_idx < 5:
                     p_card = self.hands[player][h_idx]
                     c_card = self.community_pile[c_idx]
@@ -571,15 +580,13 @@ class ViudaNegraGame:
                     self.next_turn()
 
             elif action == 'swap_all':
-                # Cambiar las 5
                 temp = self.hands[player]
                 self.hands[player] = self.community_pile
                 self.community_pile = temp
                 self.next_turn()
 
             elif action == 'knock':
-                if self.status == 'last_round': return # No puedes tocar si ya tocaron
-                # Tocar la mesa
+                if self.status == 'last_round': return 
                 self.knocker = player
                 self.status = 'last_round'
                 self.next_turn()
@@ -589,11 +596,9 @@ class ViudaNegraGame:
             return 'update'
 
     def next_turn(self):
-        # Avanzar turno
         self.turn_index = (self.turn_index + 1) % len(self.players_in_game)
         next_player = self.players_in_game[self.turn_index]
 
-        # Si estamos en ultima ronda y llegamos al que tocó, fin del juego
         if self.status == 'last_round' and next_player == self.knocker:
             self.evaluate_winner()
 
@@ -601,7 +606,8 @@ class ViudaNegraGame:
         best_score = (-1, [], "")
         winners = []
         for p in self.players_in_game:
-            score_tuple = eval_poker_hand_5(self.hands[p]) # Sin comodines especificos
+            # Pasar wild_rank
+            score_tuple = eval_poker_hand_5(self.hands[p], self.wild_rank)
             self.hand_names[p] = score_tuple[2]
             if score_tuple > best_score:
                 best_score = score_tuple
@@ -625,7 +631,7 @@ class ViudaNegraGame:
             'status': self.status,
             'hands': self.hands,
             'community_pile': self.community_pile,
-            'widow_hand': self.widow_hand, # Frontend decide si mostrar o no (solo dorso si no es host)
+            'widow_hand': self.widow_hand, 
             'turn': turn_name,
             'offer_target': offer_target,
             'knocker': self.knocker,
@@ -635,7 +641,8 @@ class ViudaNegraGame:
             'hand_names': self.hand_names,
             'game_type': 'viuda',
             'pot': self.pot,
-            'bet': self.bet
+            'bet': self.bet,
+            'wild_rank': self.wild_rank # Enviar al frontend
         }
 
 # --- GESTOR GLOBAL DE SALAS ---
