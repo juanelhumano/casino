@@ -231,11 +231,7 @@ def eval_poker_hand_5(cards, wild_rank=None):
     available = [c for c in full_deck if not any(nc['rank'] == c['rank'] and nc['suit'] == c['suit'] for nc in normal_cards)]
     
     best_hand_val = (-1, [], "")
-    
-    # Solo probar combinaciones necesarias
     import itertools
-    # Limitar iteraciones si hay demasiados comodines para evitar lag, 
-    # aunque con 5 cartas max 5 wildcards es rapido.
     for replacement in itertools.combinations(available, wild_count):
         test_hand = normal_cards + list(replacement)
         val = _eval_standard(test_hand)
@@ -245,24 +241,15 @@ def eval_poker_hand_5(cards, wild_rank=None):
     return (best_hand_val[0], best_hand_val[1], best_hand_val[2] + " (con Comodín)")
 
 def eval_texas_hand(hole_cards, community_cards):
-    """
-    Evalúa la mejor mano de 5 cartas de las 7 disponibles (2 hole + 5 community).
-    """
     all_cards = hole_cards + community_cards
-    # Generar todas las combinaciones de 5 cartas
     best_score = (-1, [], "")
-    
-    # Si hay menos de 5 cartas (no debería pasar al final), evaluar lo que hay
     if len(all_cards) < 5:
         return _eval_standard(all_cards)
-
     for combo in itertools.combinations(all_cards, 5):
         score = _eval_standard(list(combo))
         if score > best_score:
             best_score = score
-            
     return best_score
-
 
 class PokerGame:
     def __init__(self):
@@ -361,12 +348,12 @@ class PokerGame:
 class TexasHoldemGame:
     def __init__(self):
         self.deck = []
-        self.hands = {} # Cartas propias (2)
+        self.hands = {} 
         self.community_cards = []
-        self.status = 'waiting' # betting_flop, betting_turn, betting_river, finished
+        self.status = 'waiting' 
         self.players_in_game = []
-        self.active_players = [] # Jugadores que no se han retirado
-        self.decisions = {} # {player: 'call'/'fold'}
+        self.active_players = [] 
+        self.decisions = {} 
         self.winners = []
         self.win_reason = ""
         self.hand_names = {}
@@ -378,8 +365,8 @@ class TexasHoldemGame:
         self.players_in_game = players
         self.active_players = list(players)
         self.initial_bet = int(config.get('bet', 0))
-        self.bet = self.initial_bet # Apuesta de la ronda actual
-        self.pot = self.initial_bet * len(players) # Ante inicial
+        self.bet = self.initial_bet 
+        self.pot = self.initial_bet * len(players) 
         
         self.deck = create_deck()
         self.hands = {p: [] for p in players}
@@ -388,35 +375,27 @@ class TexasHoldemGame:
         self.winners = []
         self.hand_names = {p: "?" for p in players}
         
-        # Repartir 2 cartas a cada jugador
         for _ in range(2):
             for p in players:
                 if self.deck: self.hands[p].append(self.deck.pop())
         
-        # Flop inicial (3 cartas) - Regla especifica del usuario
         for _ in range(3):
             if self.deck: self.community_cards.append(self.deck.pop())
             
-        self.status = 'betting_flop' # Primera ronda de apuestas
+        self.status = 'betting_flop' 
 
     def player_action(self, player, action, data=None):
-        # action: 'call' (Ir) o 'fold' (No Ir)
         if player not in self.active_players: return
-        if player in self.decisions: return # Ya decidió en esta ronda
+        if player in self.decisions: return 
         
         self.decisions[player] = action
         
         if action == 'call':
-            self.pot += self.initial_bet # Apuesta adicional
+            self.pot += self.initial_bet 
         elif action == 'fold':
             self.active_players.remove(player)
-            # Si se retira, no paga más, pero pierde lo anterior
             
-        # Checar si todos los activos han decidido
         if len(self.decisions) >= len(self.active_players) + (len(self.players_in_game) - len(self.active_players)): 
-             # Nota: self.decisions acumula todos, incluso los que se retiraron si lo guardamos,
-             # pero aqui limpiamos decisions por ronda.
-             # Mejor logica: contar decisiones de los activos actuales.
              decided_active = [p for p in self.active_players if p in self.decisions]
              if len(decided_active) == len(self.active_players):
                  self.advance_stage()
@@ -424,7 +403,6 @@ class TexasHoldemGame:
                      return 'game_over'
                  return 'update'
                  
-        # Victoria por abandono (solo queda 1)
         if len(self.active_players) == 1:
             self.end_game_by_fold()
             return 'game_over'
@@ -432,39 +410,28 @@ class TexasHoldemGame:
         return 'update'
 
     def advance_stage(self):
-        # Resetear decisiones para la siguiente ronda
         self.decisions = {}
-        
         if self.status == 'betting_flop':
-            # Revelar Turn (4ta carta)
             if self.deck: self.community_cards.append(self.deck.pop())
             self.status = 'betting_turn'
-            
         elif self.status == 'betting_turn':
-            # Revelar River (5ta carta)
             if self.deck: self.community_cards.append(self.deck.pop())
-            self.status = 'showdown' # Prompt dice: ver 5ta carta y gana el mejor
+            self.status = 'showdown' 
             self.evaluate_winner()
-            
         elif self.status == 'showdown':
-            # Ya se evaluó
             pass
 
     def evaluate_winner(self):
         best_score = (-1, [], "")
         winners = []
-        
         for p in self.active_players:
-            # Evaluar combinando mano + comunitarias
             score_tuple = eval_texas_hand(self.hands[p], self.community_cards)
             self.hand_names[p] = score_tuple[2]
-            
             if score_tuple > best_score:
                 best_score = score_tuple
                 winners = [p]
             elif score_tuple == best_score:
                 winners.append(p)
-        
         self.winners = winners
         self.win_reason = best_score[2]
         self.status = 'finished'
@@ -489,6 +456,188 @@ class TexasHoldemGame:
             'bet': self.initial_bet
         }
 
+# --- LÓGICA VIUDA NEGRA ---
+
+class ViudaNegraGame:
+    def __init__(self):
+        self.deck = []
+        self.hands = {} # Jugadores
+        self.community_pile = [] # Cartas al centro
+        self.widow_hand = [] # Mazo extra
+        self.status = 'waiting' # selection_host, offering_widow, playing, last_round, finished
+        self.players_in_game = []
+        self.turn_index = 0
+        self.offer_index = 0 # Indice para ofrecer viuda
+        self.host_name = ""
+        self.knocker = None # Quien tocó la mesa
+        self.winners = []
+        self.win_reason = ""
+        self.hand_names = {}
+        self.pot = 0
+        self.bet = 0
+
+    def start_game(self, players, config):
+        self.players_in_game = players
+        self.host_name = players[0] # Asumimos index 0 es host
+        self.bet = int(config.get('bet', 0))
+        self.pot = self.bet * len(players)
+        
+        self.deck = create_deck()
+        self.hands = {p: [] for p in players}
+        self.community_pile = []
+        self.widow_hand = []
+        self.knocker = None
+        self.hand_names = {p: "?" for p in players}
+        self.turn_index = 0
+        self.offer_index = 1 # Empezar a ofrecer al jugador siguiente al host
+        
+        # Repartir 5 a cada jugador
+        for _ in range(5):
+            for p in players:
+                if self.deck: self.hands[p].append(self.deck.pop())
+        
+        # Repartir 5 a la Viuda
+        for _ in range(5):
+            if self.deck: self.widow_hand.append(self.deck.pop())
+
+        # Estado inicial: Host decide
+        self.status = 'selection_host' 
+
+    def player_action(self, player, action, data=None):
+        # --- FASE 1: Host Selección ---
+        if self.status == 'selection_host':
+            if player != self.host_name: return
+            
+            if action == 'keep_hand':
+                # Host se queda su mano, ofrecer viuda a los demas
+                if len(self.players_in_game) > 1:
+                    self.status = 'offering_widow'
+                    self.offer_index = 1 # Siguiente jugador (index 0 es host)
+                else:
+                    # Si juega solo (test), viuda al centro
+                    self.community_pile = self.widow_hand
+                    self.widow_hand = []
+                    self.status = 'playing'
+            
+            elif action == 'take_widow':
+                # Host cambia su mano por la viuda. Su mano vieja va al centro.
+                old_hand = self.hands[self.host_name]
+                self.hands[self.host_name] = self.widow_hand
+                self.community_pile = old_hand
+                self.widow_hand = []
+                self.status = 'playing'
+            return 'update'
+
+        # --- FASE 2: Ofrecer Viuda ---
+        elif self.status == 'offering_widow':
+            target_player = self.players_in_game[self.offer_index]
+            if player != target_player: return
+
+            if action == 'buy_widow':
+                # Compra la viuda por el valor de la apuesta
+                self.pot += self.bet
+                old_hand = self.hands[player]
+                self.hands[player] = self.widow_hand
+                self.community_pile = old_hand
+                self.widow_hand = []
+                self.status = 'playing' # Comienza el juego
+            
+            elif action == 'pass_widow':
+                # No la quiere, siguiente
+                self.offer_index += 1
+                if self.offer_index >= len(self.players_in_game):
+                    # Nadie la quiso, la viuda se abre al centro
+                    self.community_pile = self.widow_hand
+                    self.widow_hand = []
+                    self.status = 'playing'
+            return 'update'
+
+        # --- FASE 3: Juego (Playing & Last Round) ---
+        elif self.status in ['playing', 'last_round']:
+            current_p = self.players_in_game[self.turn_index]
+            if player != current_p: return
+
+            if action == 'swap_1':
+                # data: {hand_idx: 0, comm_idx: 2}
+                h_idx = data.get('hand_idx')
+                c_idx = data.get('comm_idx')
+                
+                # Intercambio
+                if 0 <= h_idx < 5 and 0 <= c_idx < 5:
+                    p_card = self.hands[player][h_idx]
+                    c_card = self.community_pile[c_idx]
+                    self.hands[player][h_idx] = c_card
+                    self.community_pile[c_idx] = p_card
+                    self.next_turn()
+
+            elif action == 'swap_all':
+                # Cambiar las 5
+                temp = self.hands[player]
+                self.hands[player] = self.community_pile
+                self.community_pile = temp
+                self.next_turn()
+
+            elif action == 'knock':
+                if self.status == 'last_round': return # No puedes tocar si ya tocaron
+                # Tocar la mesa
+                self.knocker = player
+                self.status = 'last_round'
+                self.next_turn()
+            
+            if self.status == 'finished':
+                return 'game_over'
+            return 'update'
+
+    def next_turn(self):
+        # Avanzar turno
+        self.turn_index = (self.turn_index + 1) % len(self.players_in_game)
+        next_player = self.players_in_game[self.turn_index]
+
+        # Si estamos en ultima ronda y llegamos al que tocó, fin del juego
+        if self.status == 'last_round' and next_player == self.knocker:
+            self.evaluate_winner()
+
+    def evaluate_winner(self):
+        best_score = (-1, [], "")
+        winners = []
+        for p in self.players_in_game:
+            score_tuple = eval_poker_hand_5(self.hands[p]) # Sin comodines especificos
+            self.hand_names[p] = score_tuple[2]
+            if score_tuple > best_score:
+                best_score = score_tuple
+                winners = [p]
+            elif score_tuple == best_score:
+                winners.append(p)
+        self.winners = winners
+        self.win_reason = best_score[2]
+        self.status = 'finished'
+
+    def get_state(self):
+        turn_name = None
+        offer_target = None
+        
+        if self.status in ['playing', 'last_round']:
+            turn_name = self.players_in_game[self.turn_index]
+        elif self.status == 'offering_widow':
+            offer_target = self.players_in_game[self.offer_index]
+
+        return {
+            'status': self.status,
+            'hands': self.hands,
+            'community_pile': self.community_pile,
+            'widow_hand': self.widow_hand, # Frontend decide si mostrar o no (solo dorso si no es host)
+            'turn': turn_name,
+            'offer_target': offer_target,
+            'knocker': self.knocker,
+            'host': self.host_name,
+            'winners': self.winners,
+            'win_reason': self.win_reason,
+            'hand_names': self.hand_names,
+            'game_type': 'viuda',
+            'pot': self.pot,
+            'bet': self.bet
+        }
+
 # --- GESTOR GLOBAL DE SALAS ---
 
 @app.route('/')
@@ -509,6 +658,8 @@ def on_create(data):
         game_instance = PokerGame()
     elif game_type == 'texas':
         game_instance = TexasHoldemGame()
+    elif game_type == 'viuda':
+        game_instance = ViudaNegraGame()
     else:
         game_instance = BlackjackGame()
 
