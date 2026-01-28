@@ -14,7 +14,6 @@ rooms = {}
 SUITS = ['♠', '♥', '♦', '♣']
 RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
 RANK_VALUES = {r: i for i, r in enumerate(RANKS, 2)}
-# Mapeo para nombres en español
 RANK_NAMES = {
     2: 'Doses', 3: 'Treses', 4: 'Cuatros', 5: 'Cincos', 6: 'Seises',
     7: 'Sietes', 8: 'Ochos', 9: 'Nueves', 10: 'Dieces',
@@ -27,7 +26,6 @@ RANK_NAMES_SINGULAR = {
 }
 
 def create_deck():
-    # Baraja estándar de 52 cartas
     deck = [{'rank': r, 'suit': s} for s in SUITS for r in RANKS]
     random.shuffle(deck)
     return deck
@@ -129,7 +127,6 @@ class BlackjackGame:
 
         if len(candidates) > 1:
             self.win_reason += " + Carta Alta"
-            # Simplificación: gana el primero en la lista (desempate real requeriría carta extra)
             self.winners = [candidates[0]] 
         else:
             self.winners = candidates
@@ -149,78 +146,33 @@ class BlackjackGame:
             'bet': self.bet
         }
 
-# --- LÓGICA DE POKER ---
+# --- LÓGICA DE POKER GENÉRICA ---
 
 def get_rank_name(val, plural=True):
     return RANK_NAMES.get(val, str(val)) if plural else RANK_NAMES_SINGULAR.get(val, str(val))
-
-def eval_poker_hand_5(cards, wild_rank=None):
-    """
-    Evalúa 5 cartas soportando un 'wild_rank' (e.g., '2' son comodines).
-    Devuelve (score_rank, [tie_breakers], 'Hand Description')
-    """
-    # 1. Identificar comodines
-    normal_cards = []
-    wild_count = 0
-    
-    for c in cards:
-        if wild_rank and c['rank'] == wild_rank:
-            wild_count += 1
-        else:
-            normal_cards.append(c)
-
-    if wild_count == 0:
-        return _eval_standard(cards)
-    
-    # 2. Fuerza bruta optimizada para comodines
-    # Generamos todas las posibles manos reemplazando los comodines con cartas de la baraja
-    # Para optimizar, no necesitamos probar TODA la baraja, solo rangos y palos relevantes para escalera/color
-    # Pero con 52 cartas, probar reemplazos para 1-3 comodines es rápido.
-    
-    full_deck = [{'rank': r, 'suit': s} for s in SUITS for r in RANKS]
-    # Filtramos cartas que ya tenemos (normales)
-    available = [c for c in full_deck if not any(nc['rank'] == c['rank'] and nc['suit'] == c['suit'] for nc in normal_cards)]
-    
-    best_hand_val = (-1, [], "")
-    
-    # Solo probamos combinaciones que tengan sentido para mejorar la mano, pero
-    # itertools.combinations es lo suficientemente rápido para < 4 comodines.
-    import itertools
-    for replacement in itertools.combinations(available, wild_count):
-        test_hand = normal_cards + list(replacement)
-        val = _eval_standard(test_hand)
-        if val > best_hand_val:
-            best_hand_val = val
-            
-    return (best_hand_val[0], best_hand_val[1], best_hand_val[2] + " (con Comodín)")
 
 def _eval_standard(cards):
     values = sorted([RANK_VALUES[c['rank']] for c in cards], reverse=True)
     suits = [c['suit'] for c in cards]
     rank_counts = {r: values.count(r) for r in values}
-    # Ordenar por frecuencia (cuántos tengo) y luego por valor
     sorted_counts = sorted(rank_counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
     
     is_flush = len(set(suits)) == 1
     
-    # Check Straight
     unique_vals = sorted(list(set(values)))
     is_straight = False
     straight_high = 0
     
     if len(unique_vals) >= 5:
-        # Normal
         for i in range(len(unique_vals) - 4):
             if unique_vals[i+4] - unique_vals[i] == 4:
                 is_straight = True
                 straight_high = unique_vals[i+4]
                 break
-        # A-2-3-4-5
         if not is_straight and set([14, 2, 3, 4, 5]).issubset(set(values)):
             is_straight = True
             straight_high = 5
 
-    # Determine Hand & Description
     hand_name = ""
     score = 0
     tie_breakers = [r for r, count in sorted_counts]
@@ -262,6 +214,55 @@ def _eval_standard(cards):
         
     return (score, tie_breakers, hand_name)
 
+def eval_poker_hand_5(cards, wild_rank=None):
+    normal_cards = []
+    wild_count = 0
+    
+    for c in cards:
+        if wild_rank and c['rank'] == wild_rank:
+            wild_count += 1
+        else:
+            normal_cards.append(c)
+
+    if wild_count == 0:
+        return _eval_standard(cards)
+    
+    full_deck = [{'rank': r, 'suit': s} for s in SUITS for r in RANKS]
+    available = [c for c in full_deck if not any(nc['rank'] == c['rank'] and nc['suit'] == c['suit'] for nc in normal_cards)]
+    
+    best_hand_val = (-1, [], "")
+    
+    # Solo probar combinaciones necesarias
+    import itertools
+    # Limitar iteraciones si hay demasiados comodines para evitar lag, 
+    # aunque con 5 cartas max 5 wildcards es rapido.
+    for replacement in itertools.combinations(available, wild_count):
+        test_hand = normal_cards + list(replacement)
+        val = _eval_standard(test_hand)
+        if val > best_hand_val:
+            best_hand_val = val
+            
+    return (best_hand_val[0], best_hand_val[1], best_hand_val[2] + " (con Comodín)")
+
+def eval_texas_hand(hole_cards, community_cards):
+    """
+    Evalúa la mejor mano de 5 cartas de las 7 disponibles (2 hole + 5 community).
+    """
+    all_cards = hole_cards + community_cards
+    # Generar todas las combinaciones de 5 cartas
+    best_score = (-1, [], "")
+    
+    # Si hay menos de 5 cartas (no debería pasar al final), evaluar lo que hay
+    if len(all_cards) < 5:
+        return _eval_standard(all_cards)
+
+    for combo in itertools.combinations(all_cards, 5):
+        score = _eval_standard(list(combo))
+        if score > best_score:
+            best_score = score
+            
+    return best_score
+
 
 class PokerGame:
     def __init__(self):
@@ -292,7 +293,6 @@ class PokerGame:
         self.win_reason = ""
         self.hand_names = {p: "?" for p in players}
         
-        # Seleccionar Comodín Aleatorio (e.g. '2', 'K', '7')
         self.wild_rank = None
         if config.get('wildcards', False):
             self.wild_rank = random.choice(RANKS)
@@ -331,7 +331,6 @@ class PokerGame:
         winners = []
         
         for p in self.players_in_game:
-            # Pasar wild_rank a la evaluación
             score_tuple = eval_poker_hand_5(self.hands[p], self.wild_rank)
             self.hand_names[p] = score_tuple[2]
             
@@ -359,6 +358,137 @@ class PokerGame:
             'bet': self.bet
         }
 
+class TexasHoldemGame:
+    def __init__(self):
+        self.deck = []
+        self.hands = {} # Cartas propias (2)
+        self.community_cards = []
+        self.status = 'waiting' # betting_flop, betting_turn, betting_river, finished
+        self.players_in_game = []
+        self.active_players = [] # Jugadores que no se han retirado
+        self.decisions = {} # {player: 'call'/'fold'}
+        self.winners = []
+        self.win_reason = ""
+        self.hand_names = {}
+        self.pot = 0
+        self.initial_bet = 0
+        self.bet = 0
+
+    def start_game(self, players, config):
+        self.players_in_game = players
+        self.active_players = list(players)
+        self.initial_bet = int(config.get('bet', 0))
+        self.bet = self.initial_bet # Apuesta de la ronda actual
+        self.pot = self.initial_bet * len(players) # Ante inicial
+        
+        self.deck = create_deck()
+        self.hands = {p: [] for p in players}
+        self.community_cards = []
+        self.decisions = {}
+        self.winners = []
+        self.hand_names = {p: "?" for p in players}
+        
+        # Repartir 2 cartas a cada jugador
+        for _ in range(2):
+            for p in players:
+                if self.deck: self.hands[p].append(self.deck.pop())
+        
+        # Flop inicial (3 cartas) - Regla especifica del usuario
+        for _ in range(3):
+            if self.deck: self.community_cards.append(self.deck.pop())
+            
+        self.status = 'betting_flop' # Primera ronda de apuestas
+
+    def player_action(self, player, action, data=None):
+        # action: 'call' (Ir) o 'fold' (No Ir)
+        if player not in self.active_players: return
+        if player in self.decisions: return # Ya decidió en esta ronda
+        
+        self.decisions[player] = action
+        
+        if action == 'call':
+            self.pot += self.initial_bet # Apuesta adicional
+        elif action == 'fold':
+            self.active_players.remove(player)
+            # Si se retira, no paga más, pero pierde lo anterior
+            
+        # Checar si todos los activos han decidido
+        if len(self.decisions) >= len(self.active_players) + (len(self.players_in_game) - len(self.active_players)): 
+             # Nota: self.decisions acumula todos, incluso los que se retiraron si lo guardamos,
+             # pero aqui limpiamos decisions por ronda.
+             # Mejor logica: contar decisiones de los activos actuales.
+             decided_active = [p for p in self.active_players if p in self.decisions]
+             if len(decided_active) == len(self.active_players):
+                 self.advance_stage()
+                 if self.status == 'finished':
+                     return 'game_over'
+                 return 'update'
+                 
+        # Victoria por abandono (solo queda 1)
+        if len(self.active_players) == 1:
+            self.end_game_by_fold()
+            return 'game_over'
+
+        return 'update'
+
+    def advance_stage(self):
+        # Resetear decisiones para la siguiente ronda
+        self.decisions = {}
+        
+        if self.status == 'betting_flop':
+            # Revelar Turn (4ta carta)
+            if self.deck: self.community_cards.append(self.deck.pop())
+            self.status = 'betting_turn'
+            
+        elif self.status == 'betting_turn':
+            # Revelar River (5ta carta)
+            if self.deck: self.community_cards.append(self.deck.pop())
+            self.status = 'showdown' # Prompt dice: ver 5ta carta y gana el mejor
+            self.evaluate_winner()
+            
+        elif self.status == 'showdown':
+            # Ya se evaluó
+            pass
+
+    def evaluate_winner(self):
+        best_score = (-1, [], "")
+        winners = []
+        
+        for p in self.active_players:
+            # Evaluar combinando mano + comunitarias
+            score_tuple = eval_texas_hand(self.hands[p], self.community_cards)
+            self.hand_names[p] = score_tuple[2]
+            
+            if score_tuple > best_score:
+                best_score = score_tuple
+                winners = [p]
+            elif score_tuple == best_score:
+                winners.append(p)
+        
+        self.winners = winners
+        self.win_reason = best_score[2]
+        self.status = 'finished'
+
+    def end_game_by_fold(self):
+        self.winners = [self.active_players[0]]
+        self.win_reason = "Los demás se retiraron"
+        self.status = 'finished'
+
+    def get_state(self):
+        return {
+            'status': self.status,
+            'hands': self.hands,
+            'community_cards': self.community_cards,
+            'active_players': self.active_players,
+            'decided_players': list(self.decisions.keys()),
+            'winners': self.winners,
+            'win_reason': self.win_reason,
+            'hand_names': self.hand_names,
+            'game_type': 'texas',
+            'pot': self.pot,
+            'bet': self.initial_bet
+        }
+
 # --- GESTOR GLOBAL DE SALAS ---
 
 @app.route('/')
@@ -374,8 +504,11 @@ def on_create(data):
     
     room_code = ''.join(random.choices(string.ascii_uppercase, k=4))
     
+    game_instance = None
     if game_type == 'poker':
         game_instance = PokerGame()
+    elif game_type == 'texas':
+        game_instance = TexasHoldemGame()
     else:
         game_instance = BlackjackGame()
 
@@ -431,14 +564,20 @@ def on_action(data):
     if room_code in rooms:
         room = rooms[room_code]
         game = room['game_instance']
-        
         result = game.player_action(player, action, extra_data)
-        
         state = game.get_state()
         if result == 'game_over':
             emit('game_over', state, room=room_code)
         elif result == 'update':
             emit('update_game_state', state, room=room_code)
+
+@socketio.on('send_message')
+def on_send_message(data):
+    room = data.get('room')
+    player = data.get('player')
+    message = data.get('message')
+    if room in rooms:
+        emit('chat_message', {'player': player, 'message': message}, room=room)
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000)
