@@ -558,17 +558,17 @@ class ViudaNegraGame:
             
             elif action == 'pass_widow':
                 self.offer_index += 1
-                if self.offer_index >= len(self.players_in_game):
-                    self.community_pile = self.widow_hand
-                    self.widow_hand = []
-                    self.status = 'playing'
-            return 'update'
-
+        # --- FASE 3: Juego (Playing & Last Round) ---
         elif self.status in ['playing', 'last_round']:
             current_p = self.players_in_game[self.turn_index]
             if player != current_p: return
 
-            if action == 'swap_1':
+            if action == 'pass':
+                # Permitir pasar (plantarse) sin cambiar cartas, útil en la última ronda
+                self.next_turn()
+
+            elif action == 'swap_1':
+                # data: {hand_idx: 0, comm_idx: 2}
                 h_idx = data.get('hand_idx')
                 c_idx = data.get('comm_idx')
                 
